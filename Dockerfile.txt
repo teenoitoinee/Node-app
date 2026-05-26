@@ -1,0 +1,16 @@
+FROM node:22
+
+# กำหนดโฟลเดอร์หลักใน Container
+WORKDIR /app
+
+# ก๊อบปี้ไฟล์ list รายชื่อโมดูลเข้าไป
+COPY package*.json ./
+
+# สั่งติดตั้ง Express, Cors และตัวอื่นๆ ที่โค้ดต้องการ
+RUN npm install express cors body-parser csv-stringify
+
+# ก๊อบปี้โค้ดทั้งหมด (รวมถึง index.js) เข้าไปใน Container
+COPY . .
+
+# สั่งรันแอปพลิเคชัน
+CMD ["node", "index.js"]
