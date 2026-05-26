@@ -1,19 +1,23 @@
 {
-  "name": "jackson",
+  "name": "gps-tracker",
   "version": "1.0.0",
-  "description": "",
-  "main": "index.js",
+  "description": "GPS Location Tracking System with Authentication",
+  "main": "server.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "start": "node server.js",
+    "dev": "nodemon server.js"
   },
-  "keywords": [],
+  "keywords": ["gps", "tracking", "location"],
   "author": "",
-  "license": "ISC",
-  "type": "commonjs",
+  "license": "MIT",
   "dependencies": {
-    "body-parser": "^1.20.2",
+    "express": "^4.18.2",
     "cors": "^2.8.5",
-    "csv-stringify": "^6.5.1",
-    "express": "^4.19.2"
+    "body-parser": "^1.20.2",
+    "csv-stringify": "^6.4.4",
+    "mongoose": "^7.0.0"
+  },
+  "devDependencies": {
+    "nodemon": "^3.0.1"
   }
 }
