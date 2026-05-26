@@ -1,179 +1,322 @@
 const express = require('express');
 const cors = require('cors');
 const bodyParser = require('body-parser');
-const fs = require('fs');
-const path = require('path');
+const mongoose = require('mongoose');
 const { stringify } = require('csv-stringify/sync');
+require('dotenv').config();
 
 const app = express();
 const PORT = process.env.PORT || 3000;
-const DATA_FILE = path.join(__dirname, 'data', 'gps_records.json');
+
+// MongoDB Connection String
+const MONGODB_URI = process.env.MONGODB_URI || 'mongodb://localhost:27017/gps-tracker';
 
 // Middleware
 app.use(cors());
-app.use(bodyParser.json());
+app.use(bodyParser.json({ limit: '50mb' }));
 app.use(express.static('public'));
 
-// สร้างไฟล์ JSON ถ้ายังไม่มี
-function initializeDataFile() {
-  const dataDir = path.join(__dirname, 'data');
-  if (!fs.existsSync(dataDir)) {
-    fs.mkdirSync(dataDir, { recursive: true });
-  }
-  if (!fs.existsSync(DATA_FILE)) {
-    fs.writeFileSync(DATA_FILE, JSON.stringify([], null, 2));
-  }
-}
+// ========================
+// MongoDB Connection
+// ========================
+mongoose.connect(MONGODB_URI, {
+  useNewUrlParser: true,
+  useUnifiedTopology: true,
+}).then(() => {
+  console.log('✅ MongoDB Connected Successfully!');
+}).catch(err => {
+  console.error('❌ MongoDB Connection Error:', err);
+  process.exit(1);
+});
 
-// อ่านข้อมูล GPS
-function readGPSData() {
-  try {
-    const data = fs.readFileSync(DATA_FILE, 'utf8');
-    return JSON.parse(data);
-  } catch (error) {
-    console.error('Error reading data:', error);
-    return [];
-  }
-}
+// ========================
+// MongoDB Schema & Model
+// ========================
+const gpsSchema = new mongoose.Schema({
+  employeeId: {
+    type: String,
+    required: true,
+  },
+  position: {
+    type: String,
+    required: true,
+  },
+  latitude: {
+    type: Number,
+    required: true,
+  },
+  longitude: {
+    type: Number,
+    required: true,
+  },
+  date: {
+    type: String,
+    required: true,
+  },
+  source: {
+    type: String,
+    enum: ['manual', 'gps'],
+    default: 'manual',
+  },
+  timestamp: {
+    type: Date,
+    default: Date.now,
+  },
+  accuracy: Number, // GPS accuracy in meters
+  altitude: Number,  // GPS altitude
+});
 
-// บันทึกข้อมูล GPS
-function saveGPSData(data) {
-  try {
-    fs.writeFileSync(DATA_FILE, JSON.stringify(data, null, 2));
-    return true;
-  } catch (error) {
-    console.error('Error saving data:', error);
-    return false;
-  }
-}
+const GPSRecord = mongoose.model('GPSRecord', gpsSchema);
 
+// ========================
 // API: บันทึกตำแหน่ง GPS
-app.post('/api/gps', (req, res) => {
-  const { employeeId, position, latitude, longitude, date, source } = req.body;
+// ========================
+app.post('/api/gps', async (req, res) => {
+  try {
+    const { employeeId, position, latitude, longitude, date, source, accuracy, altitude } = req.body;
 
-  // ตรวจสอบข้อมูล
-  if (!employeeId || !position || !latitude || !longitude || !date) {
-    return res.status(400).json({ 
-      success: false, 
-      message: 'ขาดข้อมูล: รหัสพนักงาน, ตำแหน่ง, latitude, longitude, หรือวันที่' 
+    // Validation
+    if (!employeeId || !position || latitude === undefined || longitude === undefined || !date) {
+      return res.status(400).json({ 
+        success: false, 
+        message: 'ขาดข้อมูล: รหัสพนักงาน, ตำแหน่ง, latitude, longitude, หรือวันที่' 
+      });
+    }
+
+    // Validate GPS coordinates
+    const lat = parseFloat(latitude);
+    const lng = parseFloat(longitude);
+    
+    if (isNaN(lat) || isNaN(lng) || lat < -90 || lat > 90 || lng < -180 || lng > 180) {
+      return res.status(400).json({ 
+        success: false, 
+        message: 'ค่า GPS ไม่ถูกต้อง (Latitude: -90 to 90, Longitude: -180 to 180)' 
+      });
+    }
+
+    // Create new record
+    const newRecord = new GPSRecord({
+      employeeId: employeeId.trim(),
+      position: position.trim(),
+      latitude: lat,
+      longitude: lng,
+      date,
+      source: source || 'manual',
+      accuracy: accuracy || null,
+      altitude: altitude || null,
+      timestamp: new Date()
     });
-  }
 
-  // ตรวจสอบ latitude longitude
-  const lat = parseFloat(latitude);
-  const lng = parseFloat(longitude);
-  
-  if (isNaN(lat) || isNaN(lng) || lat < -90 || lat > 90 || lng < -180 || lng > 180) {
-    return res.status(400).json({ 
-      success: false, 
-      message: 'ค่า GPS ไม่ถูกต้อง' 
-    });
-  }
+    // Save to MongoDB
+    await newRecord.save();
 
-  const records = readGPSData();
-  const newRecord = {
-    id: Date.now(),
-    employeeId,
-    position,
-    latitude: lat,
-    longitude: lng,
-    date,
-    source: source || 'manual',
-    timestamp: new Date().toISOString()
-  };
-
-  records.push(newRecord);
-  
-  if (saveGPSData(records)) {
-    res.json({ 
+    res.status(201).json({ 
       success: true, 
-      message: 'บันทึกข้อมูล GPS สำเร็จ',
+      message: 'บันทึกข้อมูล GPS สำเร็จ ✅',
       data: newRecord 
     });
-  } else {
+
+  } catch (error) {
+    console.error('Error saving GPS data:', error);
     res.status(500).json({ 
       success: false, 
-      message: 'เกิดข้อผิดพลาดในการบันทึก' 
+      message: 'เกิดข้อผิดพลาดในการบันทึก',
+      error: error.message
     });
   }
 });
 
+// ========================
 // API: ดึงข้อมูล GPS ทั้งหมด
-app.get('/api/gps', (req, res) => {
-  const records = readGPSData();
-  res.json({ success: true, data: records });
-});
-
-// API: ลบข้อมูล
-app.delete('/api/gps/:id', (req, res) => {
-  const { id } = req.params;
-  const records = readGPSData();
-  const filtered = records.filter(r => r.id != id);
-  
-  if (filtered.length < records.length) {
-    if (saveGPSData(filtered)) {
-      res.json({ success: true, message: 'ลบข้อมูลสำเร็จ' });
-    } else {
-      res.status(500).json({ success: false, message: 'เกิดข้อผิดพลาด' });
-    }
-  } else {
-    res.status(404).json({ success: false, message: 'ไม่พบข้อมูล' });
-  }
-});
-
-// API: Export เป็น CSV
-app.get('/api/export-csv', (req, res) => {
-  const records = readGPSData();
-  
-  if (records.length === 0) {
-    return res.status(400).json({ 
+// ========================
+app.get('/api/gps', async (req, res) => {
+  try {
+    const records = await GPSRecord.find().sort({ timestamp: -1 });
+    res.json({ 
+      success: true, 
+      count: records.length,
+      data: records 
+    });
+  } catch (error) {
+    console.error('Error fetching GPS data:', error);
+    res.status(500).json({ 
       success: false, 
-      message: 'ไม่มีข้อมูลในการ Export' 
+      message: 'เกิดข้อผิดพลาดในการดึงข้อมูล',
+      error: error.message 
     });
   }
-
-  const csvData = [
-    ['ID', 'รหัสพนักงาน', 'ตำแหน่ง', 'Latitude', 'Longitude', 'วันที่', 'แหล่งที่มา', 'เวลา'],
-    ...records.map(r => [
-      r.id,
-      r.employeeId,
-      r.position,
-      r.latitude,
-      r.longitude,
-      r.date,
-      r.source,
-      r.timestamp
-    ])
-  ];
-
-  const csv = stringify(csvData);
-  
-  res.setHeader('Content-Type', 'text/csv; charset=utf-8');
-  res.setHeader('Content-Disposition', 'attachment; filename=gps_records.csv');
-  res.send('\uFEFF' + csv); // Add BOM for Excel UTF-8 support
 });
 
-// Get local IP address
-function getLocalIP() {
-  const os = require('os');
-  const interfaces = os.networkInterfaces();
-  for (const name of Object.keys(interfaces)) {
-    for (const iface of interfaces[name]) {
-      // IPv4 and not internal
-      if (iface.family === 'IPv4' && !iface.internal) {
-        return iface.address;
-      }
-    }
+// ========================
+// API: ดึงข้อมูล GPS ตาม Employee ID
+// ========================
+app.get('/api/gps/employee/:employeeId', async (req, res) => {
+  try {
+    const { employeeId } = req.params;
+    const records = await GPSRecord.find({ employeeId }).sort({ timestamp: -1 });
+    res.json({ 
+      success: true, 
+      count: records.length,
+      data: records 
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
   }
-  return 'localhost';
-}
-
-// Server start
-initializeDataFile();
-const localIP = getLocalIP();
-app.listen(PORT, '0.0.0.0', () => {
-  console.log(`\n✅ GPS Tracker Server running!`);
-  console.log(`\n🖥️  Desktop: http://localhost:${PORT}`);
-  console.log(`📱 Mobile: http://${localIP}:${PORT}`);
-  console.log(`\n⚠️  Make sure your phone is on the same Wi-Fi network\n`);
 });
+
+// ========================
+// API: ดึงข้อมูล GPS ตามช่วงวันที่
+// ========================
+app.get('/api/gps/date/:startDate/:endDate', async (req, res) => {
+  try {
+    const { startDate, endDate } = req.params;
+    const records = await GPSRecord.find({
+      date: { $gte: startDate, $lte: endDate }
+    }).sort({ timestamp: -1 });
+    res.json({ 
+      success: true, 
+      count: records.length,
+      data: records 
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// ========================
+// API: ลบข้อมูล
+// ========================
+app.delete('/api/gps/:id', async (req, res) => {
+  try {
+    const result = await GPSRecord.findByIdAndDelete(req.params.id);
+    if (result) {
+      res.json({ 
+        success: true, 
+        message: 'ลบข้อมูลสำเร็จ ✅' 
+      });
+    } else {
+      res.status(404).json({ 
+        success: false, 
+        message: 'ไม่พบข้อมูล' 
+      });
+    }
+  } catch (error) {
+    res.status(500).json({ 
+      success: false, 
+      error: error.message 
+    });
+  }
+});
+
+// ========================
+// API: Export เป็น CSV
+// ========================
+app.get('/api/export-csv', async (req, res) => {
+  try {
+    const records = await GPSRecord.find().sort({ timestamp: -1 });
+    
+    if (records.length === 0) {
+      return res.status(400).json({ 
+        success: false, 
+        message: 'ไม่มีข้อมูลในการ Export' 
+      });
+    }
+
+    const csvData = [
+      ['ID', 'รหัสพนักงาน', 'ตำแหน่ง', 'Latitude', 'Longitude', 'วันที่', 'แหล่งที่มา', 'Accuracy (m)', 'Altitude (m)', 'เวลา'],
+      ...records.map(r => [
+        r._id.toString(),
+        r.employeeId,
+        r.position,
+        r.latitude.toFixed(6),
+        r.longitude.toFixed(6),
+        r.date,
+        r.source === 'gps' ? 'GPS' : 'Manual',
+        r.accuracy ? r.accuracy.toFixed(2) : 'N/A',
+        r.altitude ? r.altitude.toFixed(2) : 'N/A',
+        new Date(r.timestamp).toLocaleString('th-TH')
+      ])
+    ];
+
+    const csv = stringify(csvData);
+    
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+    res.setHeader('Content-Disposition', `attachment; filename=gps_records_${new Date().toISOString().split('T')[0]}.csv`);
+    res.send('\uFEFF' + csv); // Add BOM for Excel UTF-8
+  } catch (error) {
+    res.status(500).json({ 
+      success: false, 
+      error: error.message 
+    });
+  }
+});
+
+// ========================
+// API: Export ตาม Employee ID
+// ========================
+app.get('/api/export-csv/:employeeId', async (req, res) => {
+  try {
+    const { employeeId } = req.params;
+    const records = await GPSRecord.find({ employeeId }).sort({ timestamp: -1 });
+    
+    if (records.length === 0) {
+      return res.status(400).json({ 
+        success: false, 
+        message: 'ไม่มีข้อมูลสำหรับพนักงาน: ' + employeeId
+      });
+    }
+
+    const csvData = [
+      ['ID', 'รหัสพนักงาน', 'ตำแหน่ง', 'Latitude', 'Longitude', 'วันที่', 'แหล่งที่มา', 'Accuracy (m)', 'Altitude (m)', 'เวลา'],
+      ...records.map(r => [
+        r._id.toString(),
+        r.employeeId,
+        r.position,
+        r.latitude.toFixed(6),
+        r.longitude.toFixed(6),
+        r.date,
+        r.source === 'gps' ? 'GPS' : 'Manual',
+        r.accuracy ? r.accuracy.toFixed(2) : 'N/A',
+        r.altitude ? r.altitude.toFixed(2) : 'N/A',
+        new Date(r.timestamp).toLocaleString('th-TH')
+      ])
+    ];
+
+    const csv = stringify(csvData);
+    
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+    res.setHeader('Content-Disposition', `attachment; filename=gps_${employeeId}_${new Date().toISOString().split('T')[0]}.csv`);
+    res.send('\uFEFF' + csv);
+  } catch (error) {
+    res.status(500).json({ 
+      success: false, 
+      error: error.message 
+    });
+  }
+});
+
+// ========================
+// Health Check
+// ========================
+app.get('/health', (req, res) => {
+  res.json({ 
+    success: true, 
+    message: 'GPS Tracker Server is running! ✅',
+    timestamp: new Date().toISOString()
+  });
+});
+
+// ========================
+// Server Start
+// ========================
+app.listen(PORT, '0.0.0.0', () => {
+  console.log('\n' + '='.repeat(50));
+  console.log('🚀 GPS TRACKER SERVER');
+  console.log('='.repeat(50));
+  console.log(`✅ Server running on port: ${PORT}`);
+  console.log(`🌐 Local: http://localhost:${PORT}`);
+  console.log(`📡 Database: MongoDB`);
+  console.log('='.repeat(50) + '\n');
+});
+
+module.exports = app;
